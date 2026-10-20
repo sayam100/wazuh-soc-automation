@@ -1,0 +1,108 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: soc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-soc}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./services/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-soc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  n8n:
+    image: n8nio/n8n:1.81.4
+    container_name: n8n
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      NODE_ENV: production
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change-me}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-soc}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-postgres}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  hermes:
+    build:
+      context: ./services/hermes
+      dockerfile: Dockerfile
+    container_name: hermes
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      WAZUH_API_URL: ${WAZUH_API_URL:-https://wazuh-manager:55000}
+      WAZUH_API_USER: ${WAZUH_API_USER:-admin}
+      WAZUH_API_PASSWORD: ${WAZUH_API_PASSWORD:-SecretPassword}
+      WAZUH_API_TIMEOUT: ${WAZUH_API_TIMEOUT:-30}
+      HERMES_INTERVAL_SECONDS: ${HERMES_INTERVAL_SECONDS:-30}
+      HERMES_SEVERITY_THRESHOLD: ${HERMES_SEVERITY_THRESHOLD:-5}
+      HERMES_DEDUP_WINDOW_SECONDS: ${HERMES_DEDUP_WINDOW_SECONDS:-300}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/soc-alerts}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-change_me}
+    depends_on:
+      - n8n
+      - postgres
+    volumes:
+      - ./services/hermes:/app
+    command: ["python", "app.py"]
+
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.9.1
+    container_name: wazuh-manager
+    restart: unless-stopped
+    environment:
+      WAZUH_USERNAME: ${WAZUH_USERNAME:-admin}
+      WAZUH_PASSWORD: ${WAZUH_PASSWORD:-SecretPassword}
+      WAZUH_API_PORT: 55000
+    ports:
+      - "1514:1514"
+      - "1515:1515"
+      - "55000:55000"
+    volumes:
+      - wazuh_data:/var/ossec
+
+volumes:
+  postgres_data:
+  ollama_data:
+  n8n_data:
+  wazuh_data:
